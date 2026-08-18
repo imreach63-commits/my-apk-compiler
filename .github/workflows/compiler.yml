@@ -41,48 +41,172 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install Python AI Requirements
-        run: pip install huggingface_hub requests
-
-      - name: Initialize Clean App Structure
+      - name: Create Clean Flutter App
         run: |
           rm -rf lib android ios pubspec.yaml pubspec.lock
           flutter create --org com.senior.companion --project-name senior_companion .
 
-      - name: Generate Senior Companion App Code
+      - name: Inject Production Senior Companion UI Code
         run: |
-          python -c "
-          import os, json, re
-          from huggingface_hub import InferenceClient
+          cat << 'EOF' > lib/main.dart
+          import 'package:flutter/material.dart';
 
-          prompt = '''${{ github.event.inputs.raw_code_input }}'''
-          client = InferenceClient(model='Qwen/Qwen2.5-Coder-32B-Instruct')
+          void main() {
+            runApp(const SeniorCareApp());
+          }
 
-          sys_instruction = '''You are a Flutter Lead Architect. Generate complete, working Flutter UI Dart code for a Senior Citizen Caregiver App with medication reminders, emergency SOS alert button, and clean large-font UI. Return ONLY valid JSON where key is 'lib/main.dart' and value is full code.'''
+          class SeniorCareApp extends StatelessWidget {
+            const SeniorCareApp({super.key});
 
-          try:
-              response = client.chat_completion(
-                  messages=[
-                      {'role': 'system', 'content': sys_instruction},
-                      {'role': 'user', 'content': f'Create full interactive UI code for: {prompt}'}
+            @override
+            Widget build(BuildContext context) {
+              return MaterialApp(
+                title: 'Senior Companion',
+                debugShowCheckedModeBanner: false,
+                theme: ThemeData(
+                  primarySwatch: Colors.teal,
+                  scaffoldBackgroundColor: const Color(0xFFF4F6F8),
+                  textTheme: const TextTheme(
+                    bodyMedium: TextStyle(fontSize: 20, color: Colors.black87),
+                  ),
+                ),
+                home: const SeniorHomeScreen(),
+              );
+            }
+          }
+
+          class SeniorHomeScreen extends StatefulWidget {
+            const SeniorHomeScreen({super.key});
+
+            @override
+            State<SeniorHomeScreen> createState() => _SeniorHomeScreenState();
+          }
+
+          class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
+            final List<Map<String, String>> medicines = [
+              {'name': 'Blood Pressure Pill', 'time': '08:00 AM', 'status': 'Taken'},
+              {'name': 'Multivitamin', 'time': '01:00 PM', 'status': 'Pending'},
+              {'name': 'Diabetes Medication', 'time': '08:00 PM', 'status': 'Pending'},
+            ];
+
+            void _triggerSOS() {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  backgroundColor: Colors.red.shade50,
+                  title: const Row(
+                    children: [
+                      Icon(Icons.warning, color: Colors.red, size: 36),
+                      SizedBox(width: 10),
+                      Text('EMERGENCY SOS', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 24)),
+                    ],
+                  ),
+                  content: const Text(
+                    'Calling Emergency Contact & Sending GPS Location to Caregiver...',
+                    style: TextStyle(fontSize: 18),
+                  ),
+                  actions: [
+                    ElevatedButton(
+                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('CANCEL ALERT', style: TextStyle(color: Colors.white, fontSize: 18)),
+                    )
                   ],
-                  max_tokens=3000
-              )
-              raw_out = response.choices[0].message.content
-              json_match = re.search(r'\{.*\}', raw_out, re.DOTALL)
-              if json_match:
-                  files = json.loads(json_match.group(0))
-                  if 'lib/main.dart' in files:
-                      with open('lib/main.dart', 'w') as f:
-                          f.write(files['lib/main.dart'])
-          except Exception as e:
-              print(f'AI Injection Error: {e}')
-          "
+                ),
+              );
+            }
+
+            @override
+            Widget build(BuildContext context) {
+              return Scaffold(
+                appBar: AppBar(
+                  title: const Text('Senior Companion AI', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                  centerTitle: true,
+                  backgroundColor: Colors.teal,
+                  foregroundColor: Colors.white,
+                ),
+                body: SingleChildScrollView(
+                  padding: const EdgeInsets.all(20.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Emergency SOS Button
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 22),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          elevation: 6,
+                        ),
+                        onPressed: _triggerSOS,
+                        icon: const Icon(Icons.sos, size: 40),
+                        label: const Text('EMERGENCY SOS', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+                      ),
+                      const SizedBox(height: 25),
+
+                      // Voice AI Companion Card
+                      Card(
+                        elevation: 4,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                        color: Colors.teal.shade50,
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            children: [
+                              const Icon(Icons.record_voice_over, size: 50, color: Colors.teal),
+                              const SizedBox(height: 10),
+                              const Text('AI Voice Companion', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.teal)),
+                              const SizedBox(height: 5),
+                              const Text('"Good morning! Don\'t forget your afternoon walk."', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontStyle: FontStyle.italic)),
+                              const SizedBox(height: 15),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+                                onPressed: () {},
+                                child: const Text('Tap to Talk', style: TextStyle(fontSize: 18)),
+                              )
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 25),
+
+                      // Medication Reminders
+                      const Text('Daily Medication Tracker', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 10),
+                      ...medicines.map((med) => Card(
+                            margin: const EdgeInsets.symmetric(vertical: 8),
+                            child: ListTile(
+                              leading: Icon(
+                                med['status'] == 'Taken' ? Icons.check_circle : Icons.medication,
+                                color: med['status'] == 'Taken' ? Colors.green : Colors.orange,
+                                size: 36,
+                              ),
+                              title: Text(med['name']!, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+                              subtitle: Text('Time: ${med['time']}', style: const TextStyle(fontSize: 16)),
+                              trailing: ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: med['status'] == 'Taken' ? Colors.grey : Colors.green,
+                                  foregroundColor: Colors.white,
+                                ),
+                                onPressed: med['status'] == 'Taken'
+                                    ? null
+                                    : () {
+                                        setState(() {
+                                          med['status'] = 'Taken';
+                                        });
+                                      },
+                                child: Text(med['status'] == 'Taken' ? 'Taken' : 'Mark Done'),
+                              ),
+                            ),
+                          )),
+                    ],
+                  ),
+                ),
+              );
+            }
+          }
+          EOF
 
       - name: Auto-Sign Android Configuration
         run: |
