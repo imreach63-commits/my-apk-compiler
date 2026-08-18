@@ -26,10 +26,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Base Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Java Development Kit
+      - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
@@ -41,21 +41,20 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Setup Python Environment
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Python Dependencies
+      - name: Install Python AI Requirements
         run: pip install huggingface_hub requests
 
-      - name: Initialize Clean Flutter App
+      - name: Initialize Clean App Structure
         run: |
-          rm -rf lib android ios web pubspec.yaml pubspec.lock
-          flutter create --org com.universal.seniorcompanion --project-name senior_companion .
+          rm -rf lib android ios pubspec.yaml pubspec.lock
+          flutter create --org com.senior.companion --project-name senior_companion .
 
-      - name: Generate Code via Free AI Engine
-        continue-on-error: true
+      - name: Generate Senior Companion App Code
         run: |
           python -c "
           import os, json, re
@@ -64,30 +63,28 @@ jobs:
           prompt = '''${{ github.event.inputs.raw_code_input }}'''
           client = InferenceClient(model='Qwen/Qwen2.5-Coder-32B-Instruct')
 
-          sys_instruction = '''You are a Flutter expert. Output ONLY valid JSON mapping file paths to Dart file code.
-          Example: {\"lib/main.dart\": \"import 'package:flutter/material.dart'; void main() => runApp(MaterialApp(home: Scaffold(body: Center(child: Text('Senior Companion App')))));\"}'''
+          sys_instruction = '''You are a Flutter Lead Architect. Generate complete, working Flutter UI Dart code for a Senior Citizen Caregiver App with medication reminders, emergency SOS alert button, and clean large-font UI. Return ONLY valid JSON where key is 'lib/main.dart' and value is full code.'''
 
           try:
               response = client.chat_completion(
                   messages=[
                       {'role': 'system', 'content': sys_instruction},
-                      {'role': 'user', 'content': f'Write Flutter main.dart code for: {prompt}'}
+                      {'role': 'user', 'content': f'Create full interactive UI code for: {prompt}'}
                   ],
-                  max_tokens=2048
+                  max_tokens=3000
               )
               raw_out = response.choices[0].message.content
               json_match = re.search(r'\{.*\}', raw_out, re.DOTALL)
               if json_match:
                   files = json.loads(json_match.group(0))
-                  for filepath, content in files.items():
-                      os.makedirs(os.path.dirname(filepath), exist_ok=True)
-                      with open(filepath, 'w') as f:
-                          f.write(content)
+                  if 'lib/main.dart' in files:
+                      with open('lib/main.dart', 'w') as f:
+                          f.write(files['lib/main.dart'])
           except Exception as e:
-              print(f'AI Code Generation Error: {e}')
+              print(f'AI Injection Error: {e}')
           "
 
-      - name: Setup Keystore Signing
+      - name: Auto-Sign Android Configuration
         run: |
           keytool -genkey -v -keystore android/app/upload-keystore.jks \
             -storepass "androidkey" -alias "upload" -keypass "androidkey" \
@@ -104,10 +101,10 @@ jobs:
       - name: Get Dependencies
         run: flutter pub get
 
-      - name: Build App Bundle (.aab)
+      - name: Build Signed App Bundle (.aab)
         run: flutter build appbundle --release --no-tree-shake-icons
 
-      - name: Build APK (.apk)
+      - name: Build Signed APK (.apk)
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload Play Store Ready AppBundle
@@ -116,7 +113,7 @@ jobs:
           name: Play-Store-Ready-AppBundle
           path: build/app/outputs/bundle/release/app-release.aab
 
-      - name: Upload Signed APK
+      - name: Upload Production Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: Production-Signed-APK
