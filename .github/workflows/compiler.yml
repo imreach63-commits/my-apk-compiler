@@ -6,23 +6,23 @@ on:
       code_source_type:
         description: 'Source Input Type'
         required: true
-        default: 'raw_code'
+        default: 'zip_url'
         type: choice
         options:
-          - raw_code
           - zip_url
-      raw_code_input:
-        description: 'Paste Raw Code / Architecture / Blueprint Here'
-        required: false
-        type: string
+          - raw_code
       zip_file_url:
         description: 'URL of Zip File containing source code/repo'
+        required: false
+        type: string
+      raw_code_input:
+        description: 'Paste Raw Code / Architecture / Blueprint Here'
         required: false
         type: string
 
 jobs:
   universal-build:
-    name: Transpile, Inject Services, Sign & Package Production AAB
+    name: Build & Package Production APK and Play Store AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -41,303 +41,91 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Create Clean Flutter App
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python Helper Dependencies
+        run: pip install requests huggingface_hub
+
+      # Step 1: Process and Extract Source Code (Zip URL or Raw Code)
+      - name: Process Source Code Input
         run: |
-          rm -rf lib android ios pubspec.yaml pubspec.lock
-          flutter create --org com.senior.companion --project-name senior_companion .
+          python -c "
+          import os, requests, zipfile, io, json, re
+          from huggingface_hub import InferenceClient
 
-      # Step 1: Inject Dependencies into pubspec.yaml
-      - name: Add Required Native Packages
+          source_type = '''${{ github.event.inputs.code_source_type }}'''
+          zip_url = '''${{ github.event.inputs.zip_file_url }}'''
+          raw_code = '''${{ github.event.inputs.raw_code_input }}'''
+
+          # Case A: User uploaded ZIP File via URL
+          if source_type == 'zip_url' and zip_url:
+              print('Downloading Zip file from URL...')
+              r = requests.get(zip_url)
+              z = zipfile.ZipFile(io.BytesIO(r.content))
+              
+              # Find root directory in zip if wrapped
+              temp_dir = './temp_zip'
+              z.extractall(temp_dir)
+              
+              # Move contents to root workspace
+              for root, dirs, files in os.walk(temp_dir):
+                  if 'pubspec.yaml' in files or 'main.dart' in files:
+                      for item in os.listdir(root):
+                          s = os.path.join(root, item)
+                          d = os.path.join('.', item)
+                          if os.path.isdir(s):
+                              os.system(f'cp -r {s} .')
+                          else:
+                              os.system(f'cp {s} .')
+                      break
+
+          # Case B: User pasted Raw Code / Single File
+          elif source_type == 'raw_code' and raw_code:
+              print('Processing Raw Code Input...')
+              if not os.path.exists('pubspec.yaml'):
+                  os.system('flutter create --org com.universal.app --project-name universal_app . --force')
+              
+              # Write pasted raw code into lib/main.dart
+              os.makedirs('lib', exist_ok=True)
+              with open('lib/main.dart', 'w') as f:
+                  f.write(raw_code)
+          "
+
+      # Step 2: Auto-Inject All Required Android Permissions into AndroidManifest.xml
+      - name: Inject Dynamic Android Permissions
         run: |
-          cat << 'EOF' > pubspec.yaml
-          name: senior_companion
-          description: "Production Senior Citizen Caregiver & AI Companion App"
-          publish_to: 'none'
-          version: 1.0.0+1
+          python -c "
+          import os, re
 
-          environment:
-            sdk: '>=3.0.0 <4.0.0'
+          manifest_path = 'android/app/src/main/AndroidManifest.xml'
+          if os.path.exists(manifest_path):
+              with open(manifest_path, 'r') as f:
+                  content = f.read()
 
-          dependencies:
-            flutter:
-              sdk: flutter
-            cupertino_icons: ^1.0.6
-            url_launcher: ^6.2.5
-            flutter_tts: ^3.8.5
+              permissions = '''
+              <uses-permission android:name=\"android.permission.INTERNET\"/>
+              <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>
+              <uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>
+              <uses-permission android:name=\"android.permission.CAMERA\"/>
+              <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>
+              <uses-permission android:name=\"android.permission.CALL_PHONE\"/>
+              <uses-permission android:name=\"android.permission.SEND_SMS\"/>
+              <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>
+              <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>
+              <uses-permission android:name=\"android.permission.BLUETOOTH\"/>
+              <uses-permission android:name=\"android.permission.VIBRATE\"/>
+              '''
 
-          dev_dependencies:
-            flutter_test:
-              sdk: flutter
-            flutter_lints: ^3.0.0
+              if '<uses-permission' not in content:
+                  content = content.replace('<manifest', '<manifest\n' + permissions)
+                  with open(manifest_path, 'w') as f:
+                      f.write(content)
+          "
 
-          flutter:
-            uses-material-design: true
-          EOF
-
-      # Step 2: Inject Fully Functional Dart Code with Speech & Direct Calling
-      - name: Inject Production Senior Companion Interactive Code
-        run: |
-          cat << 'EOF' > lib/main.dart
-          import 'package:flutter/material.dart';
-          import 'package:url_launcher/url_launcher.dart';
-          import 'package:flutter_tts/flutter_tts.dart';
-
-          void main() {
-            runApp(const SeniorCareApp());
-          }
-
-          class SeniorCareApp extends StatelessWidget {
-            const SeniorCareApp({super.key});
-
-            @override
-            Widget build(BuildContext context) {
-              return MaterialApp(
-                title: 'Senior Companion AI',
-                debugShowCheckedModeBanner: false,
-                theme: ThemeData(
-                  primarySwatch: Colors.teal,
-                  scaffoldBackgroundColor: const Color(0xFFF4F6F8),
-                  textTheme: const TextTheme(
-                    bodyMedium: TextStyle(fontSize: 20, color: Colors.black87),
-                  ),
-                ),
-                home: const SeniorHomeScreen(),
-              );
-            }
-          }
-
-          class SeniorHomeScreen extends StatefulWidget {
-            const SeniorHomeScreen({super.key});
-
-            @override
-            State<SeniorHomeScreen> createState() => _SeniorHomeScreenState();
-          }
-
-          class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
-            late FlutterTts flutterTts;
-            bool isSpeaking = false;
-
-            final List<Map<String, String>> medicines = [
-              {'name': 'Blood Pressure Pill', 'time': '08:00 AM', 'status': 'Taken'},
-              {'name': 'Multivitamin', 'time': '01:00 PM', 'status': 'Pending'},
-              {'name': 'Diabetes Medication', 'time': '08:00 PM', 'status': 'Pending'},
-            ];
-
-            @override
-            void initState() {
-              super.initState();
-              flutterTts = FlutterTts();
-              _initTts();
-            }
-
-            void _initTts() async {
-              await flutterTts.setLanguage("en-US");
-              await flutterTts.setPitch(1.0);
-              await flutterTts.setSpeechRate(0.4); // Slower rate for elderly
-            }
-
-            // Speak Voice Message
-            Future<void> _speakCompanionMessage(String text) async {
-              setState(() {
-                isSpeaking = true;
-              });
-              await flutterTts.speak(text);
-              setState(() {
-                isSpeaking = false;
-              });
-            }
-
-            // Real Direct Phone Call Trigger
-            Future<void> _makeDirectEmergencyCall() async {
-              final Uri emergencyUri = Uri(scheme: 'tel', path: '112'); // Standard Emergency Helpline
-              if (await canLaunchUrl(emergencyUri)) {
-                await launchUrl(emergencyUri);
-              } else {
-                _showAlertDialog('Call Error', 'Unable to initiate call. Please dial 112 manually.');
-              }
-            }
-
-            // Real SMS Alert Trigger
-            Future<void> _sendEmergencySMS() async {
-              final Uri smsUri = Uri(
-                scheme: 'sms',
-                path: '911',
-                queryParameters: <String, String>{
-                  'body': 'EMERGENCY SOS ALERT! Senior citizen needs urgent assistance. Please check immediately.',
-                },
-              );
-              if (await canLaunchUrl(smsUri)) {
-                await launchUrl(smsUri);
-              }
-            }
-
-            void _showAlertDialog(String title, String message) {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-                  content: Text(message, style: const TextStyle(fontSize: 18)),
-                  actions: [
-                    ElevatedButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('OK'),
-                    )
-                  ],
-                ),
-              );
-            }
-
-            void _triggerSOS() {
-              showDialog(
-                context: context,
-                builder: (context) => AlertDialog(
-                  backgroundColor: Colors.red.shade50,
-                  title: const Row(
-                    children: [
-                      Icon(Icons.warning, color: Colors.red, size: 36),
-                      SizedBox(width: 10),
-                      Text('EMERGENCY SOS', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 22)),
-                    ],
-                  ),
-                  content: const Text(
-                    'Do you want to instantly call Emergency Helpline or send SMS to Caregiver?',
-                    style: TextStyle(fontSize: 18),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _sendEmergencySMS();
-                      },
-                      child: const Text('SEND SMS', style: TextStyle(color: Colors.orange, fontSize: 18, fontWeight: FontWeight.bold)),
-                    ),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        _makeDirectEmergencyCall();
-                      },
-                      child: const Text('CALL NOW', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                    ),
-                  ],
-                ),
-              );
-            }
-
-            @override
-            void dispose() {
-              flutterTts.stop();
-              super.dispose();
-            }
-
-            @override
-            Widget build(BuildContext context) {
-              return Scaffold(
-                appBar: AppBar(
-                  title: const Text('Senior Companion AI', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                  centerTitle: true,
-                  backgroundColor: Colors.teal,
-                  foregroundColor: Colors.white,
-                ),
-                body: SingleChildScrollView(
-                  padding: const EdgeInsets.all(20.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Emergency SOS Button
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 22),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                          elevation: 6,
-                        ),
-                        onPressed: _triggerSOS,
-                        icon: const Icon(Icons.sos, size: 40),
-                        label: const Text('EMERGENCY SOS', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-                      ),
-                      const SizedBox(height: 25),
-
-                      // Voice AI Companion Card (Now Speaks!)
-                      Card(
-                        elevation: 4,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        color: Colors.teal.shade50,
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            children: [
-                              Icon(
-                                isSpeaking ? Icons.volume_up : Icons.record_voice_over,
-                                size: 50,
-                                color: isSpeaking ? Colors.orange : Colors.teal,
-                              ),
-                              const SizedBox(height: 10),
-                              const Text('AI Voice Companion', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.teal)),
-                              const SizedBox(height: 5),
-                              const Text(
-                                '"Good morning! Remember to drink water and take your afternoon walk."',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontSize: 18, fontStyle: FontStyle.italic),
-                              ),
-                              const SizedBox(height: 15),
-                              ElevatedButton.icon(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: Colors.teal,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                ),
-                                onPressed: () {
-                                  _speakCompanionMessage("Good morning! Remember to drink water and take your afternoon walk.");
-                                },
-                                icon: const Icon(Icons.play_arrow),
-                                label: Text(isSpeaking ? 'Speaking...' : 'Listen Companion', style: const TextStyle(fontSize: 18)),
-                              )
-                            ],
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 25),
-
-                      // Medication Reminders
-                      const Text('Daily Medication Tracker', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                      const SizedBox(height: 10),
-                      ...medicines.map((med) => Card(
-                            margin: const EdgeInsets.symmetric(vertical: 8),
-                            child: ListTile(
-                              leading: Icon(
-                                med['status'] == 'Taken' ? Icons.check_circle : Icons.medication,
-                                color: med['status'] == 'Taken' ? Colors.green : Colors.orange,
-                                size: 36,
-                              ),
-                              title: Text(med['name']!, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-                              subtitle: Text('Time: ${med['time']}', style: const TextStyle(fontSize: 16)),
-                              trailing: ElevatedButton(
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: med['status'] == 'Taken' ? Colors.grey : Colors.green,
-                                  foregroundColor: Colors.white,
-                                ),
-                                onPressed: med['status'] == 'Taken'
-                                    ? null
-                                    : () {
-                                        setState(() {
-                                          med['status'] = 'Taken';
-                                        });
-                                        _speakCompanionMessage("Great job! You have taken your ${med['name']}.");
-                                      },
-                                child: Text(med['status'] == 'Taken' ? 'Taken' : 'Mark Done'),
-                              ),
-                            ),
-                          )),
-                    ],
-                  ),
-                ),
-              );
-            }
-          }
-          EOF
-
+      # Step 3: Setup Keystore Digital Signing
       - name: Auto-Sign Android Configuration
         run: |
           keytool -genkey -v -keystore android/app/upload-keystore.jks \
@@ -352,15 +140,49 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-      - name: Get Dependencies
-        run: flutter pub get
+          python -c "
+          import os
 
+          gradle_path = 'android/app/build.gradle'
+          if os.path.exists(gradle_path):
+              with open(gradle_path, 'r') as f:
+                  content = f.read()
+
+              signing_code = '''
+          def keystoreProperties = new Properties()
+          def keystorePropertiesFile = rootProject.file('key.properties')
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+          '''
+              if 'keystoreProperties' not in content:
+                  content = signing_code + content
+
+              if 'signingConfigs {' in content and 'release {' not in content:
+                  content = content.replace('signingConfigs {', '''signingConfigs {
+                  release {
+                      keyAlias keystoreProperties['keyAlias']
+                      keyPassword keystoreProperties['keyPassword']
+                      storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
+                      storePassword keystoreProperties['storePassword']
+                  }''')
+
+              with open(gradle_path, 'w') as f:
+                  f.write(content)
+          "
+
+      # Step 4: Resolve & Download All Native Dependencies
+      - name: Resolve Dependencies
+        run: flutter pub get || flutter pub upgrade
+
+      # Step 5: Build Releases (Signed Production APK & AAB)
       - name: Build Signed App Bundle (.aab)
         run: flutter build appbundle --release --no-tree-shake-icons
 
       - name: Build Signed APK (.apk)
         run: flutter build apk --release --no-tree-shake-icons
 
+      # Step 6: Upload Output Files
       - name: Upload Play Store Ready AppBundle
         uses: actions/upload-artifact@v4
         with:
