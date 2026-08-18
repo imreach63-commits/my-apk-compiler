@@ -29,11 +29,6 @@ jobs:
       - name: Checkout Base Repository
         uses: actions/checkout@v4
 
-      - name: Setup Python Environment
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
       - name: Setup Java Development Kit
         uses: actions/setup-java@v4
         with:
@@ -46,73 +41,39 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Create Basic Flutter Project Structure
-        run: |
-          if [ ! -f "pubspec.yaml" ]; then
-            flutter create --org com.universal.app . --force
-          fi
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Install Free AI Dependencies
+      - name: Install Python Dependencies
         run: pip install huggingface_hub requests
 
-      # Step 1: Process Source Code
-      - name: Extract and Preprocess Source Code
+      - name: Initialize Clean Flutter App
         run: |
-          python -c "
-          import os, requests, zipfile, io
+          rm -rf lib android ios web pubspec.yaml pubspec.lock
+          flutter create --org com.universal.seniorcompanion --project-name senior_companion .
 
-          source_type = '''${{ github.event.inputs.code_source_type }}'''
-          zip_url = '''${{ github.event.inputs.zip_file_url }}'''
-
-          if source_type == 'zip_url' and zip_url:
-              r = requests.get(zip_url)
-              z = zipfile.ZipFile(io.BytesIO(r.content))
-              z.extractall('./input_source')
-          else:
-              os.makedirs('./input_source', exist_ok=True)
-              with open('./input_source/raw_input.txt', 'w') as f:
-                  f.write('''${{ github.event.inputs.raw_code_input }}''')
-          "
-
-      # Step 2: Advanced Free AI Transpiler Engine
-      - name: Transpile Code using Free Llama-3 Model
-        env:
-          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
-          ADMOB_BANNER_ID: ${{ secrets.ADMOB_BANNER_ID }}
-          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
+      - name: Generate Code via Free AI Engine
+        continue-on-error: true
         run: |
           python -c "
           import os, json, re
           from huggingface_hub import InferenceClient
 
+          prompt = '''${{ github.event.inputs.raw_code_input }}'''
           client = InferenceClient(model='Qwen/Qwen2.5-Coder-32B-Instruct')
 
-          admob_app = os.environ.get('ADMOB_APP_ID', 'ca-app-pub-3940256099942544~3347511713')
-          admob_banner = os.environ.get('ADMOB_BANNER_ID', 'ca-app-pub-3940256099942544/6300978111')
-          razorpay_key = os.environ.get('RAZORPAY_KEY_ID', 'rzp_test_1DP5mmOlF5G5ag')
-
-          source_context = ''
-          for root, dirs, files in os.walk('./input_source'):
-              for file in files:
-                  path = os.path.join(root, file)
-                  try:
-                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                          source_context += f'\n--- FILE: {file} ---\n' + f.read()[:2000]
-                  except Exception:
-                      pass
-
-          sys_instruction = f'''You are an Expert Lead Architect.
-          Convert input blueprint into production Flutter code.
-          Include in pubspec.yaml: google_mobile_ads, razorpay_flutter, firebase_core, provider.
-          Output MUST be valid JSON mapping file path to string content ONLY.'''
+          sys_instruction = '''You are a Flutter expert. Output ONLY valid JSON mapping file paths to Dart file code.
+          Example: {\"lib/main.dart\": \"import 'package:flutter/material.dart'; void main() => runApp(MaterialApp(home: Scaffold(body: Center(child: Text('Senior Companion App')))));\"}'''
 
           try:
               response = client.chat_completion(
                   messages=[
                       {'role': 'system', 'content': sys_instruction},
-                      {'role': 'user', 'content': f'Build Flutter code for:\n{source_context}'}
+                      {'role': 'user', 'content': f'Write Flutter main.dart code for: {prompt}'}
                   ],
-                  max_tokens=4096
+                  max_tokens=2048
               )
               raw_out = response.choices[0].message.content
               json_match = re.search(r'\{.*\}', raw_out, re.DOTALL)
@@ -123,11 +84,10 @@ jobs:
                       with open(filepath, 'w') as f:
                           f.write(content)
           except Exception as e:
-              print(f'AI Generation skipped or failed: {e}. Proceeding with base Flutter app.')
+              print(f'AI Code Generation Error: {e}')
           "
 
-      # Step 3: Auto-Inject Signing Configuration
-      - name: Auto-Inject Signing Configuration
+      - name: Setup Keystore Signing
         run: |
           keytool -genkey -v -keystore android/app/upload-keystore.jks \
             -storepass "androidkey" -alias "upload" -keypass "androidkey" \
@@ -141,57 +101,23 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-          python -c "
-          import os
+      - name: Get Dependencies
+        run: flutter pub get
 
-          gradle_path = 'android/app/build.gradle'
-          if os.path.exists(gradle_path):
-              with open(gradle_path, 'r') as f:
-                  content = f.read()
+      - name: Build App Bundle (.aab)
+        run: flutter build appbundle --release --no-tree-shake-icons
 
-              signing_code = '''
-          def keystoreProperties = new Properties()
-          def keystorePropertiesFile = rootProject.file('key.properties')
-          if (keystorePropertiesFile.exists()) {
-              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-          }
-          '''
-              if 'keystoreProperties' not in content:
-                  content = signing_code + content
+      - name: Build APK (.apk)
+        run: flutter build apk --release --no-tree-shake-icons
 
-              if 'signingConfigs {' in content and 'release {' not in content:
-                  content = content.replace('signingConfigs {', '''signingConfigs {
-                  release {
-                      keyAlias keystoreProperties['keyAlias']
-                      keyPassword keystoreProperties['keyPassword']
-                      storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
-                      storePassword keystoreProperties['storePassword']
-                  }''')
-
-              with open(gradle_path, 'w') as f:
-                  f.write(content)
-          "
-
-      - name: Fetch Dependencies
-        run: flutter pub get || flutter pub upgrade
-
-      # Step 4: Compile Production App Bundle (.aab) & APK
-      - name: Build Signed Production Releases
-        run: |
-          flutter build appbundle --release
-          flutter build apk --release
-
-      # Step 5: Upload Play Store Ready Artifacts
-      - name: Upload Play Store App Bundle (.aab)
+      - name: Upload Play Store Ready AppBundle
         uses: actions/upload-artifact@v4
         with:
           name: Play-Store-Ready-AppBundle
           path: build/app/outputs/bundle/release/app-release.aab
-          retention-days: 30
 
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
           name: Production-Signed-APK
           path: build/app/outputs/flutter-apk/app-release.apk
-          retention-days: 30
