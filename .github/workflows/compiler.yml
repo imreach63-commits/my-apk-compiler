@@ -22,7 +22,7 @@ on:
 
 jobs:
   universal-build:
-    name: Transpile, Sign & Package Production AAB
+    name: Transpile, Inject Services, Sign & Package Production AAB
     runs-on: ubuntu-latest
 
     steps:
@@ -34,8 +34,8 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Dependencies
-        run: pip install openai requests
+      - name: Install Free AI Dependencies
+        run: pip install huggingface_hub requests
 
       # Step 1: Process Source Code
       - name: Extract and Preprocess Source Code
@@ -56,16 +56,23 @@ jobs:
                   f.write('''${{ github.event.inputs.raw_code_input }}''')
           "
 
-      # Step 2: AI Code Generation
-      - name: Transpile Code to Flutter Architecture
+      # Step 2: Advanced Free AI Transpiler Engine (HuggingFace Serverless Inference - Zero Cost)
+      - name: Transpile Code using Free Llama-3 Model & Inject Ecosystem Services
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
+          ADMOB_BANNER_ID: ${{ secrets.ADMOB_BANNER_ID }}
+          RAZORPAY_KEY_ID: ${{ secrets.RAZORPAY_KEY_ID }}
         run: |
           python -c "
-          import os, json
-          from openai import OpenAI
+          import os, json, re
+          from huggingface_hub import InferenceClient
 
-          client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+          # Free HuggingFace Inference Endpoint using Qwen/Qwen2.5-Coder-32B-Instruct
+          client = InferenceClient(model='Qwen/Qwen2.5-Coder-32B-Instruct')
+
+          admob_app = os.environ.get('ADMOB_APP_ID', 'ca-app-pub-3940256099942544~3347511713')
+          admob_banner = os.environ.get('ADMOB_BANNER_ID', 'ca-app-pub-3940256099942544/6300978111')
+          razorpay_key = os.environ.get('RAZORPAY_KEY_ID', 'rzp_test_1DP5mmOlF5G5ag')
 
           source_context = ''
           for root, dirs, files in os.walk('./input_source'):
@@ -77,26 +84,46 @@ jobs:
                   except Exception:
                       pass
 
-          sys_instruction = '''You are a Senior Flutter Engineer. 
-          Generate a production-ready, fully functional Flutter App structure.
-          Return ONLY a JSON object mapping file paths to raw string file contents.'''
+          sys_instruction = f'''You are an Expert Lead Architect.
+          Convert input blueprint into a production-ready, highly architectural Flutter project.
+          Required Package Integrations in pubspec.yaml and source files:
+          1. google_mobile_ads (App ID: {admob_app}, Banner ID: {admob_banner})
+          2. razorpay_flutter (Key ID: {razorpay_key})
+          3. firebase_core & firebase_auth
+          4. provider or flutter_bloc for state management
+          5. Ensure AndroidManifest.xml has Internet permission and AdMob Meta Data.
 
-          response = client.chat.completions.create(
-              model='gpt-4o',
-              max_tokens=4096,
-              response_format={'type': 'json_object'},
+          Output MUST be valid JSON mapping file path to string file content ONLY. No explanation.'''
+
+          response = client.chat_completion(
               messages=[
                   {'role': 'system', 'content': sys_instruction},
-                  {'role': 'user', 'content': f'Generate full Flutter architecture for:\n{source_context}'}
-              ]
+                  {'role': 'user', 'content': f'Build advanced production Flutter code for:\n{source_context}'}
+              ],
+              max_tokens=4096,
+              temperature=0.2
           )
 
-          files = json.loads(response.choices[0].message.content)
-          for filepath, content in files.items():
-              os.makedirs(os.path.dirname(filepath), exist_ok=True)
-              with open(filepath, 'w') as f:
-                  f.write(content)
+          raw_out = response.choices[0].message.content
+          json_match = re.search(r'\{.*\}', raw_out, re.DOTALL)
+          
+          if json_match:
+              files = json.loads(json_match.group(0))
+              for filepath, content in files.items():
+                  os.makedirs(os.path.dirname(filepath), exist_ok=True)
+                  with open(filepath, 'w') as f:
+                      f.write(content)
+          else:
+              raise ValueError('AI did not return a valid JSON structure.')
           "
+
+      - name: Inject Firebase Config (If Provided)
+        env:
+          FIREBASE_OPTIONS_BASE64: ${{ secrets.FIREBASE_OPTIONS_BASE64 }}
+        run: |
+          if [ -n "$FIREBASE_OPTIONS_BASE64" ]; then
+            echo "$FIREBASE_OPTIONS_BASE64" | base64 -d > lib/firebase_options.dart
+          fi
 
       - name: Setup Java Development Kit
         uses: actions/setup-java@v4
@@ -110,16 +137,14 @@ jobs:
           channel: 'stable'
           cache: true
 
-      # Step 3: Auto-Inject Signing Logic into build.gradle & Create Keystore
+      # Step 3: Auto-Inject Signing Configuration
       - name: Auto-Inject Signing Configuration
         run: |
-          # Keystore Generate करना
           keytool -genkey -v -keystore android/app/upload-keystore.jks \
             -storepass "androidkey" -alias "upload" -keypass "androidkey" \
             -keyalg RSA -keysize 2048 -validity 10000 \
             -dname "CN=Developer, OU=Dev, O=App, L=City, S=State, C=US"
 
-          # key.properties File बनाना
           cat <<EOF > android/key.properties
           storePassword=androidkey
           keyPassword=androidkey
@@ -127,7 +152,6 @@ jobs:
           storeFile=upload-keystore.jks
           EOF
 
-          # Python के ज़रिए build.gradle में ऑटोमैटिक साइनिंग जोड़ना
           python -c "
           import os
 
@@ -162,32 +186,32 @@ jobs:
       - name: Fetch Dependencies
         run: flutter pub get || flutter pub upgrade
 
-      # Step 4: Compile Production App Bundle (.aab) & APK
+      # Step 4: Compile Production App Bundle (.aab) & APK with Self-Healing Engine
       - name: Build Signed Production Releases
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           if ! flutter build appbundle --release; then
-            echo "AAB build failed. Executing Self-Healing..."
+            echo "AAB build failed. Executing Autonomous Self-Healing Engine via Free HuggingFace LLM..."
             python -c "
-            import os, json
-            from openai import OpenAI
-            client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+            import os, json, re
+            from huggingface_hub import InferenceClient
+
+            client = InferenceClient(model='Qwen/Qwen2.5-Coder-32B-Instruct')
             
-            sys_instruction = 'Fix the compilation issue for Flutter release build. Return ONLY a JSON object mapping relative file path to file content.'
-            response = client.chat.completions.create(
-                model='gpt-4o',
-                max_tokens=4096,
-                response_format={'type': 'json_object'},
+            sys_instruction = 'Fix Flutter compilation and dependency errors for release build. Output ONLY JSON mapping file paths to updated raw file strings.'
+            response = client.chat_completion(
                 messages=[
                     {'role': 'system', 'content': sys_instruction},
                     {'role': 'user', 'content': 'Fix syntax or pubspec dependencies for build.'}
-                ]
+                ],
+                max_tokens=4096
             )
-            files = json.loads(response.choices[0].message.content)
-            for filepath, content in files.items():
-                with open(filepath, 'w') as f:
-                    f.write(content)
+            raw_out = response.choices[0].message.content
+            json_match = re.search(r'\{.*\}', raw_out, re.DOTALL)
+            if json_match:
+                files = json.loads(json_match.group(0))
+                for filepath, content in files.items():
+                    with open(filepath, 'w') as f:
+                        f.write(content)
             "
             flutter pub get
             flutter build appbundle --release
