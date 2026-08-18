@@ -1,0 +1,159 @@
+Name: Universal Cross-Platform Code-to-APK Compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      code_source_type:
+        description: 'Source Input Type'
+        required: true
+        default: 'raw_code'
+        type: choice
+        options:
+          - raw_code
+          - zip_url
+      raw_code_input:
+        description: 'Paste Raw Code / Architecture / Blueprint Here'
+        required: false
+        type: string
+      zip_file_url:
+        description: 'URL of Zip File containing source code/repo'
+        required: false
+        type: string
+
+jobs:
+  universal-build:
+    name: Transpile, Build & Package APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Base Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python Environment
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: pip install openai requests
+
+      # Step 1: Process Zip File or Raw Input
+      - name: Extract and Preprocess Source Code
+        run: |
+          python -c "
+          import os, requests, zipfile, io
+
+          source_type = '''${{ github.event.inputs.code_source_type }}'''
+          zip_url = '''${{ github.event.inputs.zip_file_url }}'''
+
+          if source_type == 'zip_url' and zip_url:
+              print('Downloading source zip...')
+              r = requests.get(zip_url)
+              z = zipfile.ZipFile(io.BytesIO(r.content))
+              z.extractall('./input_source')
+              print('Source extracted successfully.')
+          else:
+              os.makedirs('./input_source', exist_ok=True)
+              with open('./input_source/raw_input.txt', 'w') as f:
+                  f.write('''${{ github.event.inputs.raw_code_input }}''')
+          "
+
+      # Step 2: Universal AI Architecture Transpiler
+      - name: Transpile Multi-Language Code to Flutter Architecture
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python -c "
+          import os, json, glob
+          from openai import OpenAI
+
+          client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+
+          # Read all source files into memory
+          source_context = ''
+          for root, dirs, files in os.walk('./input_source'):
+              for file in files:
+                  path = os.path.join(root, file)
+                  try:
+                      with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                          source_context += f'\n--- FILE: {file} ---\n' + f.read()[:2000]
+                  except Exception as e:
+                      pass
+
+          sys_instruction = '''You are a Master Universal Compiler and Mobile Architect. 
+          Given any multi-language code (C++, Python, Java, FlutterFlow exports, raw drafts), convert and unite them into a complete, fully functional, compilable Flutter Application. 
+          Output ONLY a valid JSON object where keys are relative file paths (e.g. \"pubspec.yaml\", \"lib/main.dart\", \"lib/backend.dart\") and values are full executable source code.'''
+
+          response = client.chat.completions.create(
+              model='gpt-4o',
+              max_tokens=4096,
+              response_format={'type': 'json_object'},
+              messages=[
+                  {'role': 'system', 'content': sys_instruction},
+                  {'role': 'user', 'content': f'Transpile and build this code architecture into a full Flutter mobile app:\n{source_context}'}
+              ]
+          )
+
+          files = json.loads(response.choices[0].message.content)
+          for filepath, content in files.items():
+              os.makedirs(os.path.dirname(filepath), exist_ok=True)
+              with open(filepath, 'w') as f:
+                  f.write(content)
+          "
+
+      - name: Setup Java Development Kit
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Flutter Engine
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Fetch Dependencies
+        run: flutter pub get || flutter pub upgrade
+
+      # Step 3: Self-Healing Build Logic
+      - name: Compile Release APK with Auto-Healing
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if ! flutter build apk --release --no-tree-shake-icons; then
+            echo "Initial compilation failed. Triggering Self-Healing..."
+            python -c "
+            import os, json
+            from openai import OpenAI
+            client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+            
+            sys_instruction = '''Fix the Flutter build error. Return ONLY a JSON object where keys are file paths that need fixing and values are updated raw file contents.'''
+            
+            response = client.chat.completions.create(
+                model='gpt-4o',
+                max_tokens=4096,
+                response_format={'type': 'json_object'},
+                messages=[
+                    {'role': 'system', 'content': sys_instruction},
+                    {'role': 'user', 'content': 'Fix any syntax/dependency issues present in the lib/ or pubspec.yaml files.'}
+                ]
+            )
+            
+            files = json.loads(response.choices[0].message.content)
+            for filepath, content in files.items():
+                with open(filepath, 'w') as f:
+                    f.write(content)
+            "
+            flutter pub get
+            flutter build apk --release --no-tree-shake-icons
+          fi
+
+      # Step 4: Upload Compiled APK Artifact
+      - name: Upload Working APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Universal-Engine-Release-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
