@@ -46,10 +46,41 @@ jobs:
           rm -rf lib android ios pubspec.yaml pubspec.lock
           flutter create --org com.senior.companion --project-name senior_companion .
 
-      - name: Inject Production Senior Companion UI Code
+      # Step 1: Inject Dependencies into pubspec.yaml
+      - name: Add Required Native Packages
+        run: |
+          cat << 'EOF' > pubspec.yaml
+          name: senior_companion
+          description: "Production Senior Citizen Caregiver & AI Companion App"
+          publish_to: 'none'
+          version: 1.0.0+1
+
+          environment:
+            sdk: '>=3.0.0 <4.0.0'
+
+          dependencies:
+            flutter:
+              sdk: flutter
+            cupertino_icons: ^1.0.6
+            url_launcher: ^6.2.5
+            flutter_tts: ^3.8.5
+
+          dev_dependencies:
+            flutter_test:
+              sdk: flutter
+            flutter_lints: ^3.0.0
+
+          flutter:
+            uses-material-design: true
+          EOF
+
+      # Step 2: Inject Fully Functional Dart Code with Speech & Direct Calling
+      - name: Inject Production Senior Companion Interactive Code
         run: |
           cat << 'EOF' > lib/main.dart
           import 'package:flutter/material.dart';
+          import 'package:url_launcher/url_launcher.dart';
+          import 'package:flutter_tts/flutter_tts.dart';
 
           void main() {
             runApp(const SeniorCareApp());
@@ -61,7 +92,7 @@ jobs:
             @override
             Widget build(BuildContext context) {
               return MaterialApp(
-                title: 'Senior Companion',
+                title: 'Senior Companion AI',
                 debugShowCheckedModeBanner: false,
                 theme: ThemeData(
                   primarySwatch: Colors.teal,
@@ -83,11 +114,78 @@ jobs:
           }
 
           class _SeniorHomeScreenState extends State<SeniorHomeScreen> {
+            late FlutterTts flutterTts;
+            bool isSpeaking = false;
+
             final List<Map<String, String>> medicines = [
               {'name': 'Blood Pressure Pill', 'time': '08:00 AM', 'status': 'Taken'},
               {'name': 'Multivitamin', 'time': '01:00 PM', 'status': 'Pending'},
               {'name': 'Diabetes Medication', 'time': '08:00 PM', 'status': 'Pending'},
             ];
+
+            @override
+            void initState() {
+              super.initState();
+              flutterTts = FlutterTts();
+              _initTts();
+            }
+
+            void _initTts() async {
+              await flutterTts.setLanguage("en-US");
+              await flutterTts.setPitch(1.0);
+              await flutterTts.setSpeechRate(0.4); // Slower rate for elderly
+            }
+
+            // Speak Voice Message
+            Future<void> _speakCompanionMessage(String text) async {
+              setState(() {
+                isSpeaking = true;
+              });
+              await flutterTts.speak(text);
+              setState(() {
+                isSpeaking = false;
+              });
+            }
+
+            // Real Direct Phone Call Trigger
+            Future<void> _makeDirectEmergencyCall() async {
+              final Uri emergencyUri = Uri(scheme: 'tel', path: '112'); // Standard Emergency Helpline
+              if (await canLaunchUrl(emergencyUri)) {
+                await launchUrl(emergencyUri);
+              } else {
+                _showAlertDialog('Call Error', 'Unable to initiate call. Please dial 112 manually.');
+              }
+            }
+
+            // Real SMS Alert Trigger
+            Future<void> _sendEmergencySMS() async {
+              final Uri smsUri = Uri(
+                scheme: 'sms',
+                path: '911',
+                queryParameters: <String, String>{
+                  'body': 'EMERGENCY SOS ALERT! Senior citizen needs urgent assistance. Please check immediately.',
+                },
+              );
+              if (await canLaunchUrl(smsUri)) {
+                await launchUrl(smsUri);
+              }
+            }
+
+            void _showAlertDialog(String title, String message) {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+                  content: Text(message, style: const TextStyle(fontSize: 18)),
+                  actions: [
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: const Text('OK'),
+                    )
+                  ],
+                ),
+              );
+            }
 
             void _triggerSOS() {
               showDialog(
@@ -98,22 +196,38 @@ jobs:
                     children: [
                       Icon(Icons.warning, color: Colors.red, size: 36),
                       SizedBox(width: 10),
-                      Text('EMERGENCY SOS', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 24)),
+                      Text('EMERGENCY SOS', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 22)),
                     ],
                   ),
                   content: const Text(
-                    'Calling Emergency Contact & Sending GPS Location to Caregiver...',
+                    'Do you want to instantly call Emergency Helpline or send SMS to Caregiver?',
                     style: TextStyle(fontSize: 18),
                   ),
                   actions: [
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _sendEmergencySMS();
+                      },
+                      child: const Text('SEND SMS', style: TextStyle(color: Colors.orange, fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text('CANCEL ALERT', style: TextStyle(color: Colors.white, fontSize: 18)),
-                    )
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _makeDirectEmergencyCall();
+                      },
+                      child: const Text('CALL NOW', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    ),
                   ],
                 ),
               );
+            }
+
+            @override
+            void dispose() {
+              flutterTts.stop();
+              super.dispose();
             }
 
             @override
@@ -145,7 +259,7 @@ jobs:
                       ),
                       const SizedBox(height: 25),
 
-                      // Voice AI Companion Card
+                      // Voice AI Companion Card (Now Speaks!)
                       Card(
                         elevation: 4,
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -154,16 +268,31 @@ jobs:
                           padding: const EdgeInsets.all(20.0),
                           child: Column(
                             children: [
-                              const Icon(Icons.record_voice_over, size: 50, color: Colors.teal),
+                              Icon(
+                                isSpeaking ? Icons.volume_up : Icons.record_voice_over,
+                                size: 50,
+                                color: isSpeaking ? Colors.orange : Colors.teal,
+                              ),
                               const SizedBox(height: 10),
                               const Text('AI Voice Companion', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.teal)),
                               const SizedBox(height: 5),
-                              const Text('"Good morning! Don\'t forget your afternoon walk."', textAlign: TextAlign.center, style: TextStyle(fontSize: 18, fontStyle: FontStyle.italic)),
+                              const Text(
+                                '"Good morning! Remember to drink water and take your afternoon walk."',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 18, fontStyle: FontStyle.italic),
+                              ),
                               const SizedBox(height: 15),
-                              ElevatedButton(
-                                style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
-                                onPressed: () {},
-                                child: const Text('Tap to Talk', style: TextStyle(fontSize: 18)),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.teal,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                ),
+                                onPressed: () {
+                                  _speakCompanionMessage("Good morning! Remember to drink water and take your afternoon walk.");
+                                },
+                                icon: const Icon(Icons.play_arrow),
+                                label: Text(isSpeaking ? 'Speaking...' : 'Listen Companion', style: const TextStyle(fontSize: 18)),
                               )
                             ],
                           ),
@@ -195,6 +324,7 @@ jobs:
                                         setState(() {
                                           med['status'] = 'Taken';
                                         });
+                                        _speakCompanionMessage("Great job! You have taken your ${med['name']}.");
                                       },
                                 child: Text(med['status'] == 'Taken' ? 'Taken' : 'Mark Done'),
                               ),
