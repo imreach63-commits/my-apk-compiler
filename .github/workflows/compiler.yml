@@ -41,7 +41,6 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-          cache: 'gradle'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -52,7 +51,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -61,7 +59,7 @@ jobs:
 
       - name: Install System Dependencies
         run: |
-          python3 -m pip install --upgrade pip requests pyyaml --quiet
+          python3 -m pip install --upgrade pip requests pyyaml gdown --quiet
           npm install -g npm@latest @react-native-community/cli corepack pnpm yarn --silent
 
       - name: Extract & Build Native Architecture (Android)
@@ -71,7 +69,7 @@ jobs:
           RAW_CODE: ${{ github.event.inputs.raw_code_input }}
         run: |
           cat << 'EOF' > extract.py
-          import os, requests, zipfile, shutil, subprocess, re
+          import os, requests, zipfile, shutil, subprocess, re, gdown
 
           source_type = os.environ.get('SOURCE_TYPE')
           zip_url = os.environ.get('ZIP_URL')
@@ -79,16 +77,23 @@ jobs:
 
           if source_type == 'zip_url' and zip_url:
               zip_path = 'downloaded_repo.zip'
-              with requests.get(zip_url, stream=True, timeout=120) as r:
-                  r.raise_for_status()
-                  with open(zip_path, 'wb') as f:
-                      for chunk in r.iter_content(chunk_size=8192):
-                          f.write(chunk)
+              
+              if 'drive.google.com' in zip_url or 'docs.google.com' in zip_url:
+                  print("Google Drive URL Detected. Downloading via gdown...")
+                  gdown.download(zip_url, zip_path, quiet=False, fuzzy=True)
+              else:
+                  print("Standard Direct URL Detected...")
+                  with requests.get(zip_url, stream=True, timeout=120) as r:
+                      r.raise_for_status()
+                      with open(zip_path, 'wb') as f:
+                          for chunk in r.iter_content(chunk_size=8192):
+                              f.write(chunk)
                           
               temp_dir = os.path.abspath('./temp_zip_extract')
               os.makedirs(temp_dir, exist_ok=True)
               subprocess.run(['unzip', '-q', '-o', zip_path, '-d', temp_dir], check=True)
-              os.remove(zip_path)
+              if os.path.exists(zip_path):
+                  os.remove(zip_path)
               
               target_dir = temp_dir
               for root, dirs, files in os.walk(temp_dir):
@@ -212,36 +217,6 @@ jobs:
           python3 extract.py
           rm extract.py
 
-      - name: Ensure Valid Gradle Wrapper
-        run: |
-          find . -name "gradlew" -exec chmod +x {} \; || true
-          if [ -d "android" ]; then
-            (cd android && gradle wrapper --gradle-version 8.4 --distribution-type bin || true)
-          elif [ -f "build.gradle" ]; then
-            gradle wrapper --gradle-version 8.4 --distribution-type bin || true
-          fi
-
-      - name: Dynamic Self-Healing Engine
-        run: |
-          cat << 'EOF' > heal.py
-          import os, re, subprocess
-          
-          if os.path.exists('android') and not os.path.exists('android/gradlew'):
-              subprocess.run(['gradle', 'wrapper'], cwd='android', check=False)
-          elif not os.path.exists('android') and os.path.exists('build.gradle') and not os.path.exists('gradlew'):
-              subprocess.run(['gradle', 'wrapper'], check=False)
-
-          for bg in ['android/app/build.gradle', 'app/build.gradle']:
-              if os.path.exists(bg):
-                  with open(bg, 'r') as f: content = f.read()
-                  if 'namespace' not in content:
-                      content = re.sub(r'android\s*\{', 'android {\n    namespace "com.universal.app"', content, count=1)
-                      with open(bg, 'w') as f: f.write(content)
-          EOF
-          python3 heal.py
-          rm heal.py
-          find . -name "gradlew" -exec chmod +x {} \; || true
-
       - name: Build Android Targets
         run: |
           mkdir -p output_release
@@ -253,12 +228,15 @@ jobs:
           elif [ -f "package.json" ]; then
             npm install --legacy-peer-deps
             if [ -d "android" ]; then
+              chmod +x android/gradlew || true
               (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
             fi
           elif [ -f "build.gradle" ] || [ -f "settings.gradle" ] || [ -d "android" ]; then
             if [ -d "android" ]; then
+              chmod +x android/gradlew || true
               (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
             else
+              chmod +x gradlew || true
               ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug
             fi
           fi
@@ -277,156 +255,10 @@ jobs:
           retention-days: 14
           path: output_release/*
 
-  build-ios:
-    name: Build iOS Binaries (IPA/App)
-    runs-on: macos-latest
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Xcode Environment
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: 'latest-stable'
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 'lts/*'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Extract & Build Native Architecture (iOS)
-        env:
-          SOURCE_TYPE: ${{ github.event.inputs.code_source_type }}
-          ZIP_URL: ${{ github.event.inputs.zip_file_url }}
-          RAW_CODE: ${{ github.event.inputs.raw_code_input }}
-        run: |
-          cat << 'EOF' > extract.py
-          import os, requests, zipfile, shutil, subprocess, re
-
-          source_type = os.environ.get('SOURCE_TYPE')
-          zip_url = os.environ.get('ZIP_URL')
-          raw_code = os.environ.get('RAW_CODE', '')
-
-          if source_type == 'zip_url' and zip_url:
-              zip_path = 'downloaded_repo.zip'
-              with requests.get(zip_url, stream=True, timeout=120) as r:
-                  r.raise_for_status()
-                  with open(zip_path, 'wb') as f:
-                      for chunk in r.iter_content(chunk_size=8192):
-                          f.write(chunk)
-                          
-              temp_dir = os.path.abspath('./temp_zip_extract')
-              os.makedirs(temp_dir, exist_ok=True)
-              subprocess.run(['unzip', '-q', '-o', zip_path, '-d', temp_dir], check=True)
-              os.remove(zip_path)
-              
-              target_dir = temp_dir
-              for root, dirs, files in os.walk(temp_dir):
-                  if any(f in files or any(item.endswith(ext) for ext in ['.xcodeproj', '.xcworkspace']) for item in files + dirs):
-                      target_dir = root
-                      break
-
-              for item in os.listdir(target_dir):
-                  s = os.path.join(target_dir, item)
-                  d = os.path.join('.', item)
-                  if os.path.abspath(s) == temp_dir: continue
-                  if os.path.isdir(s):
-                      shutil.copytree(s, d, dirs_exist_ok=True)
-                  else:
-                      shutil.copy2(s, d)
-                      
-              if os.path.exists(temp_dir):
-                  shutil.rmtree(temp_dir)
-
-          elif source_type == 'raw_code' and raw_code.strip():
-              print("Detected Raw Code - Bootstrapping Container")
-              subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
-              os.makedirs('lib', exist_ok=True)
-              with open('lib/main.dart', 'w') as f:
-                  f.write(raw_code)
-          EOF
-          python3 extract.py
-          rm extract.py
-
-      - name: Build iOS Targets & Native Xcode Compilation
-        run: |
-          mkdir -p output_release
-
-          if [ -f "pubspec.yaml" ]; then
-            flutter pub get
-            flutter build ios --release --no-codesign || true
-          elif [ -f "package.json" ]; then
-            npm install --legacy-peer-deps
-            if [ -d "ios" ]; then
-              (cd ios && pod install || true)
-              WORKSPACE=$(find ios -name "*.xcworkspace" -maxdepth 1 | head -n 1)
-              if [ -n "$WORKSPACE" ]; then
-                xcodebuild -workspace "$WORKSPACE" -scheme UniversalApp -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO clean build || true
-              fi
-            fi
-          elif [ -d "ios" ] || ls *.xcodeproj 1> /dev/null 2>&1; then
-            xcodebuild -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO clean build || true
-          fi
-
-          cat << 'EOF' > package_ipa.py
-          import os, shutil, subprocess
-
-          out_dir = os.path.abspath('output_release')
-          os.makedirs(out_dir, exist_ok=True)
-
-          for root, dirs, files in os.walk('.'):
-              for d in dirs:
-                  if d.endswith('.app') and 'Payload' not in root and 'Pods' not in root:
-                      app_path = os.path.join(root, d)
-                      payload_dir = os.path.join(root, 'Payload')
-                      os.makedirs(payload_dir, exist_ok=True)
-                      target_app = os.path.join(payload_dir, d)
-                      
-                      if not os.path.exists(target_app):
-                          shutil.copytree(app_path, target_app, symlinks=True)
-                      
-                      ipa_name = os.path.splitext(d)[0] + '.ipa'
-                      ipa_path = os.path.join(out_dir, ipa_name)
-                      
-                      cwd = os.getcwd()
-                      os.chdir(root)
-                      subprocess.run(['zip', '-q', '-y', '-r', ipa_path, 'Payload'], check=False)
-                      os.chdir(cwd)
-                      shutil.rmtree(payload_dir)
-          EOF
-          python3 package_ipa.py
-          rm package_ipa.py
-
-          if [ -z "$(ls -A output_release)" ]; then
-            echo "::error::iOS Build Failed - No IPA generated."
-            exit 1
-          fi
-
-      - name: Upload iOS Artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: iOS-Binaries
-          retention-days: 14
-          path: output_release/*
-
   release:
     name: Consolidated GitHub Release
-    needs: [build-android, build-ios]
-    if: always() && (needs.build-android.result == 'success' || needs.build-ios.result == 'success') && github.event.inputs.create_release == 'true'
+    needs: [build-android]
+    if: always() && needs.build-android.result == 'success' && github.event.inputs.create_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -447,7 +279,7 @@ jobs:
         with:
           tag_name: release-v${{ github.run_number }}
           name: Autonomous Release #${{ github.run_number }}
-          body: "Automated production binaries compiled successfully for Android and/or iOS."
+          body: "Automated production binaries compiled successfully for Android."
           files: final_release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
