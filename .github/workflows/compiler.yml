@@ -54,22 +54,11 @@ jobs:
           RAW_CODE: ${{ github.event.inputs.raw_code_input }}
         run: |
           if [ "$SOURCE_TYPE" = "zip_url" ] && [ -n "$ZIP_URL" ]; then
-            echo "Downloading ZIP file..."
-            FILE_ID=$(echo "$ZIP_URL" | sed -n 's/.*id=\([^&]*\).*/\1/p')
-            
-            if [ -n "$FILE_ID" ]; then
-              echo "Detected Google Drive File ID: $FILE_ID"
-              curl -L -c cookies.txt "https://docs.google.com/uc?export=download&id=${FILE_ID}" > confirm.html
-              CONFIRM_CODE=$(grep -o 'confirm=[^&"]*' confirm.html | head -n 1 | cut -d'=' -f2)
-              if [ -n "$CONFIRM_CODE" ]; then
-                curl -L -b cookies.txt "https://docs.google.com/uc?export=download&confirm=${CONFIRM_CODE}&id=${FILE_ID}" -o downloaded_repo.zip
-              else
-                curl -L -b cookies.txt "https://docs.google.com/uc?export=download&id=${FILE_ID}" -o downloaded_repo.zip
-              fi
-              rm -f cookies.txt confirm.html
-            else
-              curl -L "$ZIP_URL" -o downloaded_repo.zip
-            fi
+            echo "Installing gdown for reliable Google Drive downloads..."
+            python3 -m pip install --upgrade gdown
+
+            echo "Downloading source file..."
+            gdown --fuzzy "$ZIP_URL" -O downloaded_repo.zip
 
             mkdir -p temp_extract
             unzip -q -o downloaded_repo.zip -d temp_extract
