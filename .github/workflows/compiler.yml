@@ -55,8 +55,6 @@ jobs:
         run: |
           if [ "$SOURCE_TYPE" = "zip_url" ] && [ -n "$ZIP_URL" ]; then
             echo "Downloading ZIP file..."
-            
-            # Extract Google Drive File ID if present
             FILE_ID=$(echo "$ZIP_URL" | sed -n 's/.*id=\([^&]*\).*/\1/p')
             
             if [ -n "$FILE_ID" ]; then
@@ -77,7 +75,6 @@ jobs:
             unzip -q -o downloaded_repo.zip -d temp_extract
             rm -f downloaded_repo.zip
 
-            # Locate root directory containing Flutter project
             TARGET_DIR=$(find temp_extract -name "pubspec.yaml" -exec dirname {} \; | head -n 1)
             
             if [ -n "$TARGET_DIR" ]; then
@@ -88,24 +85,31 @@ jobs:
               cp -r temp_extract/* .
             fi
             rm -rf temp_extract
+
+          elif [ "$SOURCE_TYPE" = "raw_code" ] && [ -n "$RAW_CODE" ]; then
+            echo "Building from Raw Main Dart Code..."
+            flutter create --org com.hyperlocal.app --project-name hyperlocal_app . --force
+            mkdir -p lib
+            echo "$RAW_CODE" > lib/main.dart
           fi
 
-      - name: Build Android Targets
+      - name: Build Android Targets (APK & AAB)
         run: |
           mkdir -p output_release
 
           if [ -f "pubspec.yaml" ]; then
             flutter pub get
             flutter build apk --release
+            flutter build appbundle --release
           else
             echo "::error::No Flutter project found to build."
             exit 1
           fi
 
-          find build/app/outputs/flutter-apk/ -type f -name "*.apk" -exec cp {} output_release/ \; 2>/devnull || true
+          find build/app/outputs/ -type f \( -name "*.apk" -o -name "*.aab" \) -exec cp {} output_release/ \; 2>/devnull || true
 
           if [ -z "$(ls -A output_release)" ]; then
-            echo "::error::Android Build Failed - No APK generated."
+            echo "::error::Android Build Failed - No APK or AAB generated."
             exit 1
           fi
 
@@ -139,8 +143,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: release-v${{ github.run_number }}
-          name: Autonomous Release #${{ github.run_number }}
-          body: "Automated production binaries compiled successfully."
+          name: Android Production Release #${{ github.run_number }}
+          body: "Automated Android APK and AAB binaries compiled successfully."
           files: final_release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
