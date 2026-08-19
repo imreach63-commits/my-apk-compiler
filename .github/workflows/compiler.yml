@@ -48,25 +48,23 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Build Project Structure and Code
-        env:
-          RAW_CODE: ${{ github.event.inputs.raw_code_input }}
+      - name: Create and Build Flutter App
         run: |
-          # Create a fresh working flutter app
-          rm -rf my_app
-          flutter create --org com.example.app --project-name my_app my_app
+          # Create fresh flutter application
+          flutter create my_app --org com.example.myapp
           cd my_app
-          
-          # Inject custom Dart code if provided
-          if [ -n "$RAW_CODE" ]; then
-            echo "$RAW_CODE" > lib/main.dart
+
+          # Write user code to lib/main.dart if input provided
+          RAW_INPUT='${{ github.event.inputs.raw_code_input }}'
+          if [ -n "$RAW_INPUT" ]; then
+            echo "$RAW_INPUT" > lib/main.dart
           fi
 
-          # Build APK
+          # Get packages and build APK
           flutter pub get
           flutter build apk --release
 
-          # Copy output APK
+          # Prepare output directory
           mkdir -p ../output_release
           cp build/app/outputs/flutter-apk/app-release.apk ../output_release/app-release.apk
 
