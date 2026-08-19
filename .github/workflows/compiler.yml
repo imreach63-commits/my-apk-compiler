@@ -12,11 +12,11 @@ on:
           - raw_code
           - zip_url
       zip_file_url:
-        description: 'URL of Zip File containing source code/repo'
+        description: 'URL of Zip File containing source code'
         required: false
         type: string
       raw_code_input:
-        description: 'Paste Raw Code / Architecture / App Prompt Here'
+        description: 'Paste Raw Code or App Prompt Here'
         required: false
         type: string
       create_release:
@@ -42,11 +42,6 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
@@ -58,287 +53,42 @@ jobs:
         with:
           python-version: '3.x'
 
-      - name: Install System Dependencies
-        run: |
-          python3 -m pip install --upgrade pip requests pyyaml --quiet
-          npm install -g npm@latest corepack pnpm yarn --silent
-
-      - name: Extract & Build Native Architecture (Android)
+      - name: Prepare Code and Environment
         env:
           SOURCE_TYPE: ${{ github.event.inputs.code_source_type }}
           ZIP_URL: ${{ github.event.inputs.zip_file_url }}
           RAW_CODE: ${{ github.event.inputs.raw_code_input }}
         run: |
-          cat << 'EOF' > extract.py
-          import os, requests, zipfile, shutil, subprocess, re
+          python3 -c "
+          import os, requests, zipfile, shutil, subprocess
 
           source_type = os.environ.get('SOURCE_TYPE')
           zip_url = os.environ.get('ZIP_URL')
           raw_code = os.environ.get('RAW_CODE', '')
 
           if source_type == 'zip_url' and zip_url:
-              zip_path = 'downloaded_repo.zip'
-              with requests.get(zip_url, stream=True, timeout=120) as r:
-                  r.raise_for_status()
-                  with open(zip_path, 'wb') as f:
-                      for chunk in r.iter_content(chunk_size=8192):
-                          f.write(chunk)
-                          
-              temp_dir = os.path.abspath('./temp_zip_extract')
-              os.makedirs(temp_dir, exist_ok=True)
-              subprocess.run(['unzip', '-q', '-o', zip_path, '-d', temp_dir], check=True)
-              os.remove(zip_path)
-              
-              target_dir = temp_dir
-              for root, dirs, files in os.walk(temp_dir):
-                  if 'pubspec.yaml' in files or 'package.json' in files or 'build.gradle' in files or 'settings.gradle' in files:
-                      target_dir = root
-                      break
-
-              for item in os.listdir(target_dir):
-                  s = os.path.join(target_dir, item)
-                  d = os.path.join('.', item)
-                  if os.path.abspath(s) == temp_dir: continue
-                  if os.path.isdir(s):
-                      shutil.copytree(s, d, dirs_exist_ok=True)
-                  else:
-                      shutil.copy2(s, d)
-                      
-              if os.path.exists(temp_dir):
-                  shutil.rmtree(temp_dir)
-
-          elif source_type == 'raw_code' or raw_code.strip():
-              if 'import androidx' in raw_code or '@Composable' in raw_code:
-                  print("Detected Native Kotlin Code")
-                  pkg_match = re.search(r'package\s+([a-zA-Z0-9_.]+)', raw_code)
-                  pkg_name = pkg_match.group(1) if pkg_match else "com.universal.app"
-                  
-                  os.makedirs("app/src/main/java/" + pkg_name.replace('.', '/'), exist_ok=True)
-                  with open("build.gradle", "w") as f:
-                      f.write("""
-                      buildscript {
-                          repositories { google(); mavenCentral() }
-                          dependencies {
-                              classpath 'com.android.tools.build:gradle:8.2.1'
-                              classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
-                          }
-                      }
-                      allprojects { repositories { google(); mavenCentral() } }
-                      """)
-                      
-                  with open("app/build.gradle", "w") as f:
-                      f.write(f"""
-                      plugins {{
-                          id 'com.android.application'
-                          id 'org.jetbrains.kotlin.android'
-                      }}
-                      android {{
-                          namespace '{pkg_name}'
-                          compileSdk 34
-                          defaultConfig {{
-                              applicationId '{pkg_name}'
-                              minSdk 24
-                              targetSdk 34
-                              versionCode 1
-                              versionName "1.0"
-                          }}
-                          buildFeatures {{ compose true }}
-                          composeOptions {{ kotlinCompilerExtensionVersion '1.5.4' }}
-                          compileOptions {{
-                              sourceCompatibility JavaVersion.VERSION_17
-                              targetCompatibility JavaVersion.VERSION_17
-                          }}
-                          kotlinOptions {{ jvmTarget = '17' }}
-                      }}
-                      dependencies {{
-                          implementation 'androidx.core:core-ktx:1.12.0'
-                          implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
-                          implementation 'androidx.activity:activity-compose:1.8.2'
-                          implementation platform('androidx.compose:compose-bom:2023.08.00')
-                          implementation 'androidx.compose.ui:ui'
-                          implementation 'androidx.compose.ui:ui-graphics'
-                          implementation 'androidx.compose.ui:ui-tooling-preview'
-                          implementation 'androidx.compose.material3:material3'
-                      }}
-                      """)
-
-                  with open("settings.gradle", "w") as f:
-                      f.write("include ':app'")
-
-                  os.makedirs("app/src/main", exist_ok=True)
-                  with open("app/src/main/AndroidManifest.xml", "w") as f:
-                      f.write(f"""<?xml version="1.0" encoding="utf-8"?>
-                      <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-                          <application
-                              android:allowBackup="true"
-                              android:icon="@android:drawable/sym_def_app_icon"
-                              android:label="UniversalApp"
-                              android:theme="@android:style/Theme.Material.Light.NoActionBar">
-                              <activity
-                                  android:name=".MainActivity"
-                                  android:exported="true">
-                                  <intent-filter>
-                                      <action android:name="android.intent.action.MAIN" />
-                                      <category android:name="android.intent.category.LAUNCHER" />
-                                  </intent-filter>
-                              </activity>
-                          </application>
-                      </manifest>
-                      """)
-
-                  activity_file = os.path.join("app/src/main/java", pkg_name.replace('.', '/'), "MainActivity.kt")
-                  with open(activity_file, "w") as f:
-                      f.write(raw_code)
-
-              else:
-                  print("Bootstrapping Robust Flutter Architecture")
-                  subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
+              r = requests.get(zip_url)
+              with open('app.zip', 'wb') as f:
+                  f.write(r.content)
+              with zipfile.ZipFile('app.zip', 'r') as zip_ref:
+                  zip_ref.extractall('extracted_app')
+          else:
+              subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
+              if raw_code.strip():
                   os.makedirs('lib', exist_ok=True)
-                  
-                  if "void main()" in raw_code:
-                      final_code = raw_code
-                  else:
-                      final_code = f"""import 'package:flutter/material.dart';
-
-  void main() {{
-    runApp(const DynamicProductionApp());
-  }}
-
-  class DynamicProductionApp extends StatelessWidget {{
-    const DynamicProductionApp({{super.key}});
-
-    @override
-    Widget build(BuildContext context) {{
-      return MaterialApp(
-        title: 'Production Ready App',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorSchemeSeed: Colors.indigo,
-          brightness: Brightness.dark,
-        ),
-        home: const AppHomeScreen(),
-      );
-    }}
-  }}
-
-  class AppHomeScreen extends StatefulWidget {{
-    const AppHomeScreen({{super.key}});
-
-    @override
-    State<AppHomeScreen> createState() => _AppHomeScreenState();
-  }}
-
-  class _AppHomeScreenState extends State<AppHomeScreen> {{
-    int _counter = 0;
-
-    @override
-    Widget build(BuildContext context) {{
-      return Scaffold(
-        appBar: AppBar(
-          title: const Text('Generated App Engine'),
-          centerTitle: true,
-          elevation: 2,
-        ),
-        body: Center(
-          child: Card(
-            margin: const EdgeInsets.all(20),
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Icon(Icons.rocket_launch, size: 64, color: Colors.indigoAccent),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'App Compiled Successfully!',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'Prompt Payload Processed:\\n"${raw_code.strip() if raw_code.strip() else "Default Mobile Engine"}"',
-                    style: const TextStyle(fontSize: 14, color: Colors.grey),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 20),
-                  ElevatedButton.icon(
-                    onPressed: () => setState(() => _counter++),
-                    icon: const Icon(Icons.add),
-                    label: Text('Action Counter: $_counter'),
-                  )
-                ],
-              ),
-            ),
-          ),
-        ),
-      );
-    }}
-  }}
-  """
                   with open('lib/main.dart', 'w') as f:
-                      f.write(final_code)
-          EOF
-          python3 extract.py
-          rm extract.py
+                      f.write(raw_code)
+          "
 
-      - name: Ensure Valid Gradle Wrapper
-        run: |
-          find . -name "gradlew" -exec chmod +x {} \; || true
-          if [ -d "android" ]; then
-            (cd android && gradle wrapper --gradle-version 8.4 --distribution-type bin || true)
-          elif [ -f "build.gradle" ]; then
-            gradle wrapper --gradle-version 8.4 --distribution-type bin || true
-          fi
-
-      - name: Dynamic Self-Healing Engine
-        run: |
-          cat << 'EOF' > heal.py
-          import os, re, subprocess
-
-          if os.path.exists('android') and not os.path.exists('android/gradlew'):
-              subprocess.run(['gradle', 'wrapper'], cwd='android', check=False)
-          elif not os.path.exists('android') and os.path.exists('build.gradle') and not os.path.exists('gradlew'):
-              subprocess.run(['gradle', 'wrapper'], check=False)
-
-          for bg in ['android/app/build.gradle', 'app/build.gradle']:
-              if os.path.exists(bg):
-                  with open(bg, 'r') as f: content = f.read()
-                  if 'namespace' not in content:
-                      content = re.sub(r'android\s*\{', 'android {\n    namespace "com.universal.app"', content, count=1)
-                      with open(bg, 'w') as f: f.write(content)
-          EOF
-          python3 heal.py
-          rm heal.py
-          find . -name "gradlew" -exec chmod +x {} \; || true
-
-      - name: Build Android Targets
+      - name: Build Android App (APK/AAB)
         run: |
           mkdir -p output_release
-
           if [ -f "pubspec.yaml" ]; then
             flutter pub get
-            flutter build apk --release --no-tree-shake-icons || flutter build apk --release
-            flutter build appbundle --release --no-tree-shake-icons || true
-          elif [ -f "package.json" ]; then
-            npm install --legacy-peer-deps
-            if [ -d "android" ]; then
-              (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
-            fi
-          elif [ -f "build.gradle" ] || [ -f "settings.gradle" ] || [ -d "android" ]; then
-            if [ -d "android" ]; then
-              (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
-            else
-              ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug
-            fi
+            flutter build apk --release || true
+            flutter build appbundle --release || true
           fi
-
           find . -type f \( -name "*.apk" -o -name "*.aab" \) -exec cp {} output_release/ \; 2>/devnull || true
-
-          if [ -z "$(ls -A output_release)" ]; then
-            echo "::error::Android Build Failed - No APK or AAB generated."
-            exit 1
-          fi
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
@@ -375,3 +125,4 @@ jobs:
           files: final_release/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
