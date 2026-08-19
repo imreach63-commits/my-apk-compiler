@@ -1,4 +1,4 @@
-Name: Universal-Autonomous-Production-Compiler-Verified
+name: Universal-Autonomous-Production-Compiler-Verified
 
 on:
   workflow_dispatch:
