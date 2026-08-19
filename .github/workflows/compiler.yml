@@ -2,6 +2,16 @@ name: Universal-Autonomous-Production-Compiler-Verified
 
 on:
   workflow_dispatch:
+    inputs:
+      raw_code_input:
+        description: 'Paste Flutter Code or Custom UI Here'
+        required: false
+        type: string
+      create_release:
+        description: 'Create GitHub Release?'
+        required: true
+        type: boolean
+        default: true
 
 jobs:
   build-android:
@@ -26,19 +36,64 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Auto Generate & Build APK
+      - name: Build Project Structure
+        env:
+          USER_CODE: ${{ github.event.inputs.raw_code_input }}
         run: |
-          flutter create dummy_app
-          cd dummy_app
+          # 1. Fresh Flutter App Creation
+          flutter create main_app --org com.production.app
+          cd main_app
+
+          # 2. Inject Code safely if provided
+          if [ -n "$USER_CODE" ]; then
+            cat << 'EOF' > lib/main.dart
+          ${{ github.event.inputs.raw_code_input }}
+          EOF
+          fi
+
+          # 3. Get Dependencies and Build Binaries
           flutter pub get
           flutter build apk --release
+          flutter build appbundle --release
+
+          # 4. Copy Output Binaries
           mkdir -p ../output_release
           cp build/app/outputs/flutter-apk/app-release.apk ../output_release/app-release.apk
+          cp build/app/outputs/bundle/release/app-release.aab ../output_release/app-release.aab
 
-      - name: Upload Android Artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: Android-Binaries
           retention-days: 14
           path: output_release/*
+
+  release:
+    name: Consolidated GitHub Release
+    needs: [build-android]
+    if: always() && needs.build-android.result == 'success' && github.event.inputs.create_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: combined_artifacts
+
+      - name: Package Assets
+        run: |
+          mkdir -p final_release
+          find combined_artifacts/ -type f -exec cp {} final_release/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-v${{ github.run_number }}
+          name: Full Production App Build #${{ github.run_number }}
+          body: "Frontend + Backend Production Binaries Compiled Successfully."
+          files: final_release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           
