@@ -195,12 +195,10 @@ jobs:
                   subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
                   os.makedirs('lib', exist_ok=True)
                   
-                  # Default App code if prompt is generic, else replaces with input prompt
                   if "void main()" in raw_code:
                       final_code = raw_code
                   else:
-                      final_code = f"""import 'package:flutter/material me.dart';
-  import 'package:flutter/material.dart';
+                      final_code = f"""import 'package:flutter/material.dart';
 
   void main() {{
     runApp(const DynamicProductionApp());
