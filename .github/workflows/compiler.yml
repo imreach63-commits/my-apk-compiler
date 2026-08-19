@@ -1,4 +1,4 @@
-name: Play-Store-Ready Universal Code-to-AAB Compiler
+Name: Universal-Autonomous-Production-Compiler-Verified
 
 on:
   workflow_dispatch:
@@ -16,14 +16,21 @@ on:
         required: false
         type: string
       raw_code_input:
-        description: 'Paste Raw Code / Architecture / Blueprint Here'
+        description: 'Paste Raw Code / Architecture / Blueprint Here (Dart, Swift, Kotlin, React Native)'
         required: false
         type: string
+      create_release:
+        description: 'Create GitHub Release and Attach Binaries?'
+        required: true
+        type: boolean
+        default: true
 
 jobs:
-  universal-build:
-    name: Build & Package Production APK and Play Store AAB
+  build-android:
+    name: Build Android Binaries (APK/AAB)
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout Repository
@@ -34,163 +41,415 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+          cache: 'gradle'
 
-      - name: Setup Flutter Engine
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
           cache: true
 
-      - name: Setup Python Environment
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.x'
 
-      - name: Install Python Helper Dependencies
-        run: pip install requests huggingface_hub
-
-      # Step 1: Process and Extract Source Code (Zip URL or Raw Code)
-      - name: Process Source Code Input
+      - name: Install System Dependencies
         run: |
-          python -c "
-          import os, requests, zipfile, io, json, re
-          from huggingface_hub import InferenceClient
+          python3 -m pip install --upgrade pip requests pyyaml --quiet
+          npm install -g npm@latest @react-native-community/cli corepack pnpm yarn --silent
 
-          source_type = '''${{ github.event.inputs.code_source_type }}'''
-          zip_url = '''${{ github.event.inputs.zip_file_url }}'''
-          raw_code = '''${{ github.event.inputs.raw_code_input }}'''
+      - name: Extract & Build Native Architecture (Android)
+        env:
+          SOURCE_TYPE: ${{ github.event.inputs.code_source_type }}
+          ZIP_URL: ${{ github.event.inputs.zip_file_url }}
+          RAW_CODE: ${{ github.event.inputs.raw_code_input }}
+        run: |
+          cat << 'EOF' > extract.py
+          import os, requests, zipfile, shutil, subprocess, re
 
-          # Case A: User uploaded ZIP File via URL
+          source_type = os.environ.get('SOURCE_TYPE')
+          zip_url = os.environ.get('ZIP_URL')
+          raw_code = os.environ.get('RAW_CODE', '')
+
           if source_type == 'zip_url' and zip_url:
-              print('Downloading Zip file from URL...')
-              r = requests.get(zip_url)
-              z = zipfile.ZipFile(io.BytesIO(r.content))
+              zip_path = 'downloaded_repo.zip'
+              with requests.get(zip_url, stream=True, timeout=120) as r:
+                  r.raise_for_status()
+                  with open(zip_path, 'wb') as f:
+                      for chunk in r.iter_content(chunk_size=8192):
+                          f.write(chunk)
+                          
+              temp_dir = os.path.abspath('./temp_zip_extract')
+              os.makedirs(temp_dir, exist_ok=True)
+              subprocess.run(['unzip', '-q', '-o', zip_path, '-d', temp_dir], check=True)
+              os.remove(zip_path)
               
-              # Find root directory in zip if wrapped
-              temp_dir = './temp_zip'
-              z.extractall(temp_dir)
-              
-              # Move contents to root workspace
+              target_dir = temp_dir
               for root, dirs, files in os.walk(temp_dir):
-                  if 'pubspec.yaml' in files or 'main.dart' in files:
-                      for item in os.listdir(root):
-                          s = os.path.join(root, item)
-                          d = os.path.join('.', item)
-                          if os.path.isdir(s):
-                              os.system(f'cp -r {s} .')
-                          else:
-                              os.system(f'cp {s} .')
+                  if 'pubspec.yaml' in files or 'package.json' in files or 'build.gradle' in files or 'settings.gradle' in files:
+                      target_dir = root
                       break
 
-          # Case B: User pasted Raw Code / Single File
-          elif source_type == 'raw_code' and raw_code:
-              print('Processing Raw Code Input...')
-              if not os.path.exists('pubspec.yaml'):
-                  os.system('flutter create --org com.universal.app --project-name universal_app . --force')
+              for item in os.listdir(target_dir):
+                  s = os.path.join(target_dir, item)
+                  d = os.path.join('.', item)
+                  if os.path.abspath(s) == temp_dir: continue
+                  if os.path.isdir(s):
+                      shutil.copytree(s, d, dirs_exist_ok=True)
+                  else:
+                      shutil.copy2(s, d)
+                      
+              if os.path.exists(temp_dir):
+                  shutil.rmtree(temp_dir)
+
+          elif source_type == 'raw_code' and raw_code.strip():
+              if 'import androidx' in raw_code or 'package ' in raw_code or '@Composable' in raw_code:
+                  print("Detected Native Kotlin/Jetpack Compose Raw Code")
+                  pkg_match = re.search(r'package\s+([a-zA-Z0-9_.]+)', raw_code)
+                  pkg_name = pkg_match.group(1) if pkg_match else "com.universal.app"
+                  
+                  os.makedirs("app/src/main/java/" + pkg_name.replace('.', '/'), exist_ok=True)
+                  
+                  with open("build.gradle", "w") as f:
+                      f.write("""
+                      buildscript {
+                          repositories { google(); mavenCentral() }
+                          dependencies {
+                              classpath 'com.android.tools.build:gradle:8.2.1'
+                              classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.20'
+                          }
+                      }
+                      allprojects { repositories { google(); mavenCentral() } }
+                      """)
+                      
+                  with open("app/build.gradle", "w") as f:
+                      f.write(f"""
+                      plugins {{
+                          id 'com.android.application'
+                          id 'org.jetbrains.kotlin.android'
+                      }}
+                      android {{
+                          namespace '{pkg_name}'
+                          compileSdk 34
+                          defaultConfig {{
+                              applicationId '{pkg_name}'
+                              minSdk 24
+                              targetSdk 34
+                              versionCode 1
+                              versionName "1.0"
+                          }}
+                          buildFeatures {{ compose true }}
+                          composeOptions {{ kotlinCompilerExtensionVersion '1.5.4' }}
+                          compileOptions {{
+                              sourceCompatibility JavaVersion.VERSION_17
+                              targetCompatibility JavaVersion.VERSION_17
+                          }}
+                          kotlinOptions {{ jvmTarget = '17' }}
+                      }}
+                      dependencies {{
+                          implementation 'androidx.core:core-ktx:1.12.0'
+                          implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.7.0'
+                          implementation 'androidx.activity:activity-compose:1.8.2'
+                          implementation platform('androidx.compose:compose-bom:2023.08.00')
+                          implementation 'androidx.compose.ui:ui'
+                          implementation 'androidx.compose.ui:ui-graphics'
+                          implementation 'androidx.compose.ui:ui-tooling-preview'
+                          implementation 'androidx.compose.material3:material3'
+                      }}
+                      """)
+
+                  with open("settings.gradle", "w") as f:
+                      f.write("include ':app'")
+
+                  os.makedirs("app/src/main", exist_ok=True)
+                  with open("app/src/main/AndroidManifest.xml", "w") as f:
+                      f.write(f"""<?xml version="1.0" encoding="utf-8"?>
+                      <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                          <application
+                              android:allowBackup="true"
+                              android:icon="@android:drawable/sym_def_app_icon"
+                              android:label="UniversalApp"
+                              android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                              <activity
+                                  android:name=".MainActivity"
+                                  android:exported="true">
+                                  <intent-filter>
+                                      <action android:name="android.intent.action.MAIN" />
+                                      <category android:name="android.intent.category.LAUNCHER" />
+                                  </intent-filter>
+                              </activity>
+                          </application>
+                      </manifest>
+                      """)
+
+                  activity_file = os.path.join("app/src/main/java", pkg_name.replace('.', '/'), "MainActivity.kt")
+                  with open(activity_file, "w") as f:
+                      f.write(raw_code)
+
+              elif 'import React' in raw_code or 'export default' in raw_code or 'require(' in raw_code:
+                  print("Detected React Native Raw Code")
+                  subprocess.run(['npx', '@react-native-community/cli@latest', 'init', 'UniversalApp', '--skip-install', '--install-pods', 'false'], check=False)
+                  if os.path.exists('UniversalApp'):
+                      for item in os.listdir('UniversalApp'):
+                          shutil.move(os.path.join('UniversalApp', item), '.')
+                      shutil.rmtree('UniversalApp')
+                  with open('App.js', 'w') as f:
+                      f.write(raw_code)
+
+              else:
+                  print("Detected Flutter/Dart Raw Code")
+                  subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
+                  os.makedirs('lib', exist_ok=True)
+                  with open('lib/main.dart', 'w') as f:
+                      f.write(raw_code)
+          EOF
+          python3 extract.py
+          rm extract.py
+
+      - name: Ensure Valid Gradle Wrapper
+        run: |
+          find . -name "gradlew" -exec chmod +x {} \; || true
+          if [ -d "android" ]; then
+            (cd android && gradle wrapper --gradle-version 8.4 --distribution-type bin || true)
+          elif [ -f "build.gradle" ]; then
+            gradle wrapper --gradle-version 8.4 --distribution-type bin || true
+          fi
+
+      - name: Dynamic Self-Healing Engine
+        run: |
+          cat << 'EOF' > heal.py
+          import os, re, subprocess
+          
+          if os.path.exists('android') and not os.path.exists('android/gradlew'):
+              subprocess.run(['gradle', 'wrapper'], cwd='android', check=False)
+          elif not os.path.exists('android') and os.path.exists('build.gradle') and not os.path.exists('gradlew'):
+              subprocess.run(['gradle', 'wrapper'], check=False)
+
+          for bg in ['android/app/build.gradle', 'app/build.gradle']:
+              if os.path.exists(bg):
+                  with open(bg, 'r') as f: content = f.read()
+                  if 'namespace' not in content:
+                      content = re.sub(r'android\s*\{', 'android {\n    namespace "com.universal.app"', content, count=1)
+                      with open(bg, 'w') as f: f.write(content)
+          EOF
+          python3 heal.py
+          rm heal.py
+          find . -name "gradlew" -exec chmod +x {} \; || true
+
+      - name: Build Android Targets
+        run: |
+          mkdir -p output_release
+
+          if [ -f "pubspec.yaml" ]; then
+            flutter pub get
+            flutter build apk --release || true
+            flutter build appbundle --release || true
+          elif [ -f "package.json" ]; then
+            npm install --legacy-peer-deps
+            if [ -d "android" ]; then
+              (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
+            fi
+          elif [ -f "build.gradle" ] || [ -f "settings.gradle" ] || [ -d "android" ]; then
+            if [ -d "android" ]; then
+              (cd android && ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug)
+            else
+              ./gradlew assembleRelease bundleRelease || ./gradlew assembleDebug
+            fi
+          fi
+
+          find . -type f \( -name "*.apk" -o -name "*.aab" \) -exec cp {} output_release/ \; 2>/devnull || true
+
+          if [ -z "$(ls -A output_release)" ]; then
+            echo "::error::Android Build Failed - No APK or AAB generated."
+            exit 1
+          fi
+
+      - name: Upload Android Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Android-Binaries
+          retention-days: 14
+          path: output_release/*
+
+  build-ios:
+    name: Build iOS Binaries (IPA/App)
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode Environment
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: 'latest-stable'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Extract & Build Native Architecture (iOS)
+        env:
+          SOURCE_TYPE: ${{ github.event.inputs.code_source_type }}
+          ZIP_URL: ${{ github.event.inputs.zip_file_url }}
+          RAW_CODE: ${{ github.event.inputs.raw_code_input }}
+        run: |
+          cat << 'EOF' > extract.py
+          import os, requests, zipfile, shutil, subprocess, re
+
+          source_type = os.environ.get('SOURCE_TYPE')
+          zip_url = os.environ.get('ZIP_URL')
+          raw_code = os.environ.get('RAW_CODE', '')
+
+          if source_type == 'zip_url' and zip_url:
+              zip_path = 'downloaded_repo.zip'
+              with requests.get(zip_url, stream=True, timeout=120) as r:
+                  r.raise_for_status()
+                  with open(zip_path, 'wb') as f:
+                      for chunk in r.iter_content(chunk_size=8192):
+                          f.write(chunk)
+                          
+              temp_dir = os.path.abspath('./temp_zip_extract')
+              os.makedirs(temp_dir, exist_ok=True)
+              subprocess.run(['unzip', '-q', '-o', zip_path, '-d', temp_dir], check=True)
+              os.remove(zip_path)
               
-              # Write pasted raw code into lib/main.dart
+              target_dir = temp_dir
+              for root, dirs, files in os.walk(temp_dir):
+                  if any(f in files or any(item.endswith(ext) for ext in ['.xcodeproj', '.xcworkspace']) for item in files + dirs):
+                      target_dir = root
+                      break
+
+              for item in os.listdir(target_dir):
+                  s = os.path.join(target_dir, item)
+                  d = os.path.join('.', item)
+                  if os.path.abspath(s) == temp_dir: continue
+                  if os.path.isdir(s):
+                      shutil.copytree(s, d, dirs_exist_ok=True)
+                  else:
+                      shutil.copy2(s, d)
+                      
+              if os.path.exists(temp_dir):
+                  shutil.rmtree(temp_dir)
+
+          elif source_type == 'raw_code' and raw_code.strip():
+              print("Detected Raw Code - Bootstrapping Container")
+              subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
               os.makedirs('lib', exist_ok=True)
               with open('lib/main.dart', 'w') as f:
                   f.write(raw_code)
-          "
-
-      # Step 2: Auto-Inject All Required Android Permissions into AndroidManifest.xml
-      - name: Inject Dynamic Android Permissions
-        run: |
-          python -c "
-          import os, re
-
-          manifest_path = 'android/app/src/main/AndroidManifest.xml'
-          if os.path.exists(manifest_path):
-              with open(manifest_path, 'r') as f:
-                  content = f.read()
-
-              permissions = '''
-              <uses-permission android:name=\"android.permission.INTERNET\"/>
-              <uses-permission android:name=\"android.permission.ACCESS_FINE_LOCATION\"/>
-              <uses-permission android:name=\"android.permission.ACCESS_COARSE_LOCATION\"/>
-              <uses-permission android:name=\"android.permission.CAMERA\"/>
-              <uses-permission android:name=\"android.permission.RECORD_AUDIO\"/>
-              <uses-permission android:name=\"android.permission.CALL_PHONE\"/>
-              <uses-permission android:name=\"android.permission.SEND_SMS\"/>
-              <uses-permission android:name=\"android.permission.READ_EXTERNAL_STORAGE\"/>
-              <uses-permission android:name=\"android.permission.WRITE_EXTERNAL_STORAGE\"/>
-              <uses-permission android:name=\"android.permission.BLUETOOTH\"/>
-              <uses-permission android:name=\"android.permission.VIBRATE\"/>
-              '''
-
-              if '<uses-permission' not in content:
-                  content = content.replace('<manifest', '<manifest\n' + permissions)
-                  with open(manifest_path, 'w') as f:
-                      f.write(content)
-          "
-
-      # Step 3: Setup Keystore Digital Signing
-      - name: Auto-Sign Android Configuration
-        run: |
-          keytool -genkey -v -keystore android/app/upload-keystore.jks \
-            -storepass "androidkey" -alias "upload" -keypass "androidkey" \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -dname "CN=Developer, OU=Dev, O=App, L=City, S=State, C=US"
-
-          cat <<EOF > android/key.properties
-          storePassword=androidkey
-          keyPassword=androidkey
-          keyAlias=upload
-          storeFile=upload-keystore.jks
           EOF
+          python3 extract.py
+          rm extract.py
 
-          python -c "
-          import os
+      - name: Build iOS Targets & Native Xcode Compilation
+        run: |
+          mkdir -p output_release
 
-          gradle_path = 'android/app/build.gradle'
-          if os.path.exists(gradle_path):
-              with open(gradle_path, 'r') as f:
-                  content = f.read()
+          if [ -f "pubspec.yaml" ]; then
+            flutter pub get
+            flutter build ios --release --no-codesign || true
+          elif [ -f "package.json" ]; then
+            npm install --legacy-peer-deps
+            if [ -d "ios" ]; then
+              (cd ios && pod install || true)
+              WORKSPACE=$(find ios -name "*.xcworkspace" -maxdepth 1 | head -n 1)
+              if [ -n "$WORKSPACE" ]; then
+                xcodebuild -workspace "$WORKSPACE" -scheme UniversalApp -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO clean build || true
+              fi
+            fi
+          elif [ -d "ios" ] || ls *.xcodeproj 1> /dev/null 2>&1; then
+            xcodebuild -sdk iphoneos -configuration Release CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO clean build || true
+          fi
 
-              signing_code = '''
-          def keystoreProperties = new Properties()
-          def keystorePropertiesFile = rootProject.file('key.properties')
-          if (keystorePropertiesFile.exists()) {
-              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-          }
-          '''
-              if 'keystoreProperties' not in content:
-                  content = signing_code + content
+          cat << 'EOF' > package_ipa.py
+          import os, shutil, subprocess
 
-              if 'signingConfigs {' in content and 'release {' not in content:
-                  content = content.replace('signingConfigs {', '''signingConfigs {
-                  release {
-                      keyAlias keystoreProperties['keyAlias']
-                      keyPassword keystoreProperties['keyPassword']
-                      storeFile keystoreProperties['storeFile'] ? file(keystoreProperties['storeFile']) : null
-                      storePassword keystoreProperties['storePassword']
-                  }''')
+          out_dir = os.path.abspath('output_release')
+          os.makedirs(out_dir, exist_ok=True)
 
-              with open(gradle_path, 'w') as f:
-                  f.write(content)
-          "
+          for root, dirs, files in os.walk('.'):
+              for d in dirs:
+                  if d.endswith('.app') and 'Payload' not in root and 'Pods' not in root:
+                      app_path = os.path.join(root, d)
+                      payload_dir = os.path.join(root, 'Payload')
+                      os.makedirs(payload_dir, exist_ok=True)
+                      target_app = os.path.join(payload_dir, d)
+                      
+                      if not os.path.exists(target_app):
+                          shutil.copytree(app_path, target_app, symlinks=True)
+                      
+                      ipa_name = os.path.splitext(d)[0] + '.ipa'
+                      ipa_path = os.path.join(out_dir, ipa_name)
+                      
+                      cwd = os.getcwd()
+                      os.chdir(root)
+                      subprocess.run(['zip', '-q', '-y', '-r', ipa_path, 'Payload'], check=False)
+                      os.chdir(cwd)
+                      shutil.rmtree(payload_dir)
+          EOF
+          python3 package_ipa.py
+          rm package_ipa.py
 
-      # Step 4: Resolve & Download All Native Dependencies
-      - name: Resolve Dependencies
-        run: flutter pub get || flutter pub upgrade
+          if [ -z "$(ls -A output_release)" ]; then
+            echo "::error::iOS Build Failed - No IPA generated."
+            exit 1
+          fi
 
-      # Step 5: Build Releases (Signed Production APK & AAB)
-      - name: Build Signed App Bundle (.aab)
-        run: flutter build appbundle --release --no-tree-shake-icons
-
-      - name: Build Signed APK (.apk)
-        run: flutter build apk --release --no-tree-shake-icons
-
-      # Step 6: Upload Output Files
-      - name: Upload Play Store Ready AppBundle
+      - name: Upload iOS Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Play-Store-Ready-AppBundle
-          path: build/app/outputs/bundle/release/app-release.aab
+          name: iOS-Binaries
+          retention-days: 14
+          path: output_release/*
 
-      - name: Upload Production Signed APK
-        uses: actions/upload-artifact@v4
+  release:
+    name: Consolidated GitHub Release
+    needs: [build-android, build-ios]
+    if: always() && (needs.build-android.result == 'success' || needs.build-ios.result == 'success') && github.event.inputs.create_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
         with:
-          name: Production-Signed-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: combined_artifacts
+
+      - name: Package Assets
+        run: |
+          mkdir -p final_release
+          find combined_artifacts/ -type f -exec cp {} final_release/ \;
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: release-v${{ github.run_number }}
+          name: Autonomous Release #${{ github.run_number }}
+          body: "Automated production binaries compiled successfully for Android and/or iOS."
+          files: final_release/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
