@@ -48,47 +48,27 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
-
-      - name: Prepare Code and Environment
+      - name: Build Project Structure and Code
         env:
-          SOURCE_TYPE: ${{ github.event.inputs.code_source_type }}
-          ZIP_URL: ${{ github.event.inputs.zip_file_url }}
           RAW_CODE: ${{ github.event.inputs.raw_code_input }}
         run: |
-          python3 -c "
-          import os, requests, zipfile, shutil, subprocess
-
-          source_type = os.environ.get('SOURCE_TYPE')
-          zip_url = os.environ.get('ZIP_URL')
-          raw_code = os.environ.get('RAW_CODE', '')
-
-          if source_type == 'zip_url' and zip_url:
-              r = requests.get(zip_url)
-              with open('app.zip', 'wb') as f:
-                  f.write(r.content)
-              with zipfile.ZipFile('app.zip', 'r') as zip_ref:
-                  zip_ref.extractall('extracted_app')
-          else:
-              subprocess.run(['flutter', 'create', '--org', 'com.universal.app', '--project-name', 'universal_app', '.', '--force'], check=True)
-              if raw_code.strip():
-                  os.makedirs('lib', exist_ok=True)
-                  with open('lib/main.dart', 'w') as f:
-                      f.write(raw_code)
-          "
-
-      - name: Build Android App (APK/AAB)
-        run: |
-          mkdir -p output_release
-          if [ -f "pubspec.yaml" ]; then
-            flutter pub get
-            flutter build apk --release || true
-            flutter build appbundle --release || true
+          # Create a fresh working flutter app
+          rm -rf my_app
+          flutter create --org com.example.app --project-name my_app my_app
+          cd my_app
+          
+          # Inject custom Dart code if provided
+          if [ -n "$RAW_CODE" ]; then
+            echo "$RAW_CODE" > lib/main.dart
           fi
-          find . -type f \( -name "*.apk" -o -name "*.aab" \) -exec cp {} output_release/ \; 2>/devnull || true
+
+          # Build APK
+          flutter pub get
+          flutter build apk --release
+
+          # Copy output APK
+          mkdir -p ../output_release
+          cp build/app/outputs/flutter-apk/app-release.apk ../output_release/app-release.apk
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
